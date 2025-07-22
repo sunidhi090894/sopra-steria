@@ -177,7 +177,7 @@ I can help you extract insights, identify trends, and provide recommendations ba
                 </div>
                 <div className="space-y-2">
                   <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 text-xs shadow-sm">
-                    {file.type}
+                    {file.type === "text/plain" ? "CRM Data" : file.type}
                   </Badge>
                   <div className="flex items-center gap-1">
                     <Zap className="h-3 w-3 text-emerald-600" />

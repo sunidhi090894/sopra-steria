@@ -1,7 +1,11 @@
-"use server"
-
 import { type NextRequest, NextResponse } from "next/server"
-import { assignAgentToDocument, processWithAgent } from "@/lib/crew-agents"
+import {
+  assignAgent,
+  getAgentId,
+  simulateAgentAnalysis,
+  generateComprehensiveInsights,
+  type ProcessedFile,
+} from "@/lib/crew-agents"
 
 // Function to extract text from different file types
 async function extractTextFromFile(file: File): Promise<string> {
@@ -160,63 +164,48 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "No files provided" }, { status: 400 })
     }
 
-    // Process each file with specialized agents
-    const processedFiles = await Promise.all(
-      files.map(async (file) => {
-        const extractedText = await extractTextFromFile(file)
-        const assignedAgent = assignAgentToDocument(file.name, file.type, extractedText)
+    // Process each file
+    const processedFiles: ProcessedFile[] = []
 
-        // Process with the assigned agent
-        const agentResult = await processWithAgent(assignedAgent, extractedText, file.name)
+    for (const file of files) {
+      // Extract text content (simplified - in real app you'd use proper parsers)
+      const content = await file.text()
 
-        return {
-          name: file.name,
-          type: getFileType(file.name, file.type),
-          size: file.size,
-          agent: assignedAgent.name,
-          agentId: assignedAgent.id,
-          extractedText: extractedText,
-          agentAnalysis: agentResult,
-          status: "processed",
-          uploadDate: new Date().toISOString(),
-        }
-      }),
-    )
+      // Assign appropriate AI agent
+      const agent = assignAgent(file.name, content)
+      const agentId = getAgentId(agent)
 
-    // Create comprehensive document context for AI
-    const documentContext = processedFiles
-      .map(
-        (file) =>
-          `Document: ${file.name} (${file.type})
-Agent: ${file.agent}
-Analysis: ${file.agentAnalysis.result}
-Key Insights: ${file.agentAnalysis.insights.join(", ")}
-Recommendations: ${file.agentAnalysis.recommendations.join(", ")}
-Content: ${file.extractedText}
----`,
-      )
-      .join("\n\n")
+      // Simulate agent analysis
+      const agentAnalysis = simulateAgentAnalysis(agent, content)
 
-    // Aggregate agent results
-    const agentResults = processedFiles.map((file) => file.agentAnalysis)
+      const processedFile: ProcessedFile = {
+        name: file.name,
+        size: file.size,
+        type: file.type || "text/plain",
+        uploadDate: new Date().toISOString(),
+        agent,
+        agentId,
+        content: content.substring(0, 1000), // Truncate for demo
+        agentAnalysis,
+      }
+
+      processedFiles.push(processedFile)
+    }
+
+    // Generate comprehensive insights
+    const comprehensiveData = generateComprehensiveInsights(processedFiles)
+
+    // Simulate processing delay
+    await new Promise((resolve) => setTimeout(resolve, 2000))
 
     return NextResponse.json({
       success: true,
-      processedFiles,
-      documentContext,
-      agentResults,
-      totalFiles: files.length,
-      processingDate: new Date().toISOString(),
-      vectorStoreReady: true,
-      agentsSummary: {
-        totalAgents: new Set(processedFiles.map((f) => f.agentId)).size,
-        agentsUsed: [...new Set(processedFiles.map((f) => f.agent))],
-        averageConfidence: agentResults.reduce((acc, r) => acc + r.confidence, 0) / agentResults.length,
-      },
+      message: `Successfully processed ${files.length} file(s)`,
+      ...comprehensiveData,
     })
   } catch (error) {
     console.error("File processing error:", error)
-    return NextResponse.json({ error: "Processing failed" }, { status: 500 })
+    return NextResponse.json({ error: "Failed to process files" }, { status: 500 })
   }
 }
 
