@@ -183,7 +183,9 @@ The data indicates strong performance with opportunities for optimization in cus
   }
 
   const handleSend = async () => {
+    console.log("Sending message:", input)
     if (!input.trim() || !isDataReady) return
+    console.log("Processing input:", input)
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -198,6 +200,7 @@ The data indicates strong performance with opportunities for optimization in cus
 
     try {
       const assistantMessage = await generateResponse(input)
+      console.log("Helloooooooo:", assistantMessage)
       setMessages((prev) => [...prev, assistantMessage])
     } catch (error) {
       console.error("Error generating response:", error)

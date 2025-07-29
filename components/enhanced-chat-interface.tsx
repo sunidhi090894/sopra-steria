@@ -1,5 +1,6 @@
 "use client"
 
+import React from "react"
 import { useChat } from "ai/react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -33,7 +34,7 @@ interface EnhancedChatInterfaceProps {
 export function EnhancedChatInterface({ isDataReady, processedData, uploadedFiles }: EnhancedChatInterfaceProps) {
   const { messages, input, handleInputChange, handleSubmit, isLoading } = useChat({
     api: "/api/chat",
-    body: { processedData },
+    body: (messages: any) => ({ messages, processedData }),
     initialMessages:
       isDataReady && processedData
         ? [
@@ -49,6 +50,11 @@ I can help you extract insights, identify trends, and provide recommendations ba
           ]
         : [],
   })
+
+  // Debug: log messages array after every update
+  React.useEffect(() => {
+    console.log("[EnhancedChatInterface] messages:", messages)
+  }, [messages])
 
   const quickQuestions = [
     {
