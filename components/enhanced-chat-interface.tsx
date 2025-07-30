@@ -2,7 +2,6 @@
 
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
-import { useChat } from 'ai/react';
 import {
   Card,
   CardContent,
