@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest) {
+  
   // In Next.js App Router, the method is usually inferred, but this check matches the provided example.
   if (request.method !== "POST") {
     return NextResponse.json({ error: "Method not allowed" }, { status: 405 });
