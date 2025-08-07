@@ -1,3 +1,368 @@
+import { type NextRequest, NextResponse } from "next/server";
+import {
+  assignAgent,
+  getAgentId,
+  simulateAgentAnalysis,
+  generateComprehensiveInsights,
+  type ProcessedFile,
+} from "@/lib/crew-agents";
+
+// --- Import necessary parsing libraries (install them first via pnpm add [library-name]) ---
+// For PDFs:
+import pdfParse from 'pdf-parse';
+// For XLSX/Excel:
+import * as XLSX from 'xlsx';
+// For DOCX/Word:
+import mammoth from 'mammoth';
+
+// Node.js Buffer is often needed for parsing binary file ArrayBuffers
+import { Buffer } from 'buffer';
+
+// Function to extract text from different file types
+async function extractTextFromFile(file: File): Promise<string> {
+  const fileName = file.name.toLowerCase();
+  const fileType = file.type;
+
+  try {
+    // 1. Handle plain text files (.txt) - Always return actual content
+    if (fileType.includes("text/plain") || fileName.endsWith(".txt")) {
+      return await file.text();
+    }
+
+    // 2. Handle CSV files (.csv) - Always return actual content
+    if (fileType.includes("text/csv") || fileName.endsWith(".csv")) {
+      return await file.text();
+    }
+
+    // 3. Handle PDF files (.pdf)
+    if (fileType.includes("application/pdf") || fileName.endsWith(".pdf")) {
+      console.log(`Attempting to parse PDF: ${file.name}`);
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const data = await pdfParse(Buffer.from(arrayBuffer));
+        return `PDF Content from ${file.name}:\n${data.text}`;
+      } catch (pdfError) {
+        console.error(`Error parsing PDF ${file.name}:`, pdfError);
+        return `[Failed to parse PDF: ${file.name}] Error: ${pdfError instanceof Error ? pdfError.message : String(pdfError)}`;
+      }
+    }
+
+    // 4. Handle XLSX/XLS (Excel) files
+    if (
+      fileType.includes("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") ||
+      fileName.endsWith(".xlsx") ||
+      fileName.endsWith(".xls")
+    ) {
+      console.log(`Attempting to parse Excel: ${file.name}`);
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const workbook = XLSX.read(Buffer.from(arrayBuffer), { type: 'array' });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        return `Excel Content from ${file.name}:\n${XLSX.utils.sheet_to_txt(worksheet)}`;
+      } catch (excelError) {
+        console.error(`Error parsing Excel ${file.name}:`, excelError);
+        return `[Failed to parse Excel: ${file.name}] Error: ${excelError instanceof Error ? excelError.message : String(excelError)}`;
+      }
+    }
+
+    // 5. Handle DOCX (Word) files
+    if (
+      fileType.includes("application/vnd.openxmlformats-officedocument.wordprocessingml.document") ||
+      fileName.endsWith(".docx")
+    ) {
+      console.log(`Attempting to parse DOCX: ${file.name}`);
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const result = await mammoth.extractRawText({ arrayBuffer: arrayBuffer });
+        return `Word Document Content from ${file.name}:\n${result.value}`;
+      } catch (docxError) {
+        console.error(`Error parsing DOCX ${file.name}:`, docxError);
+        return `[Failed to parse DOCX: ${file.name}] Error: ${docxError instanceof Error ? docxError.message : String(docxError)}`;
+      }
+    }
+
+    // Fallback for unsupported types, indicating actual content is missing
+    console.warn(`Unsupported file type for full content extraction: ${file.name} (${file.type}).`);
+    return `[Unsupported file type for full extraction] File: ${file.name}, Type: ${file.type || "Unknown"}, Size: ${(file.size / 1024).toFixed(2)} KB`;
+
+  } catch (error) {
+    console.error(`Generic error extracting text from file ${file.name}:`, error);
+    return `Error processing ${file.name}. File type: ${file.type}, Size: ${file.size} bytes. Detailed error: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const formData = await request.formData();
+    const files = formData.getAll("files") as File[];
+
+    if (!files || files.length === 0) {
+      return NextResponse.json({ error: "No files provided" }, { status: 400 });
+    }
+
+    const processedFiles: ProcessedFile[] = [];
+
+    for (const file of files) {
+      const extractedContent = await extractTextFromFile(file);
+      const agent = assignAgent(file.name, extractedContent);
+      const agentId = getAgentId(agent);
+
+      const processedFile: ProcessedFile = {
+        name: file.name,
+        size: file.size,
+        type: file.type || "text/plain",
+        uploadDate: new Date().toISOString(),
+        agent,
+        agentId,
+        content: extractedContent.substring(0, 1000),
+      };
+
+      processedFiles.push(processedFile);
+    }
+
+    const comprehensiveData = generateComprehensiveInsights(processedFiles);
+
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+
+    return NextResponse.json({
+      success: true,
+      message: `Successfully processed ${files.length} file(s)`,
+      ...comprehensiveData,
+    });
+  } catch (error) {
+    console.error("File processing error:", error);
+    return NextResponse.json({ error: "Failed to process files" }, { status: 500 });
+  }
+}
+
+function getFileType(filename: string, mimeType: string): string {
+  const extension = filename.split(".").pop()?.toLowerCase();
+  const lowerFilename = filename.toLowerCase();
+
+  if (lowerFilename.includes("crm") || lowerFilename.includes("customer") || lowerFilename.includes("lead")) {
+    return "CRM Data";
+  }
+  if (lowerFilename.includes("sales") || lowerFilename.includes("revenue")) {
+    return "Sales Report";
+  }
+  if (lowerFilename.includes("campaign") || lowerFilename.includes("marketing")) {
+    return "Marketing Data";
+  }
+  if (lowerFilename.includes("feedback") || lowerFilename.includes("review")) {
+    return "Customer Feedback";
+  }
+
+  if (extension === "csv" || mimeType.includes("csv")) return "CSV Data";
+  if (extension === "pdf" || mimeType.includes("pdf")) return "PDF Document";
+  if (extension === "xlsx" || extension === "xls" || mimeType.includes("spreadsheet")) return "Spreadsheet";
+  if (mimeType.includes("image")) return "Scanned Document";
+  if (extension === "txt" || mimeType.includes("text")) return "Text Document";
+
+  return "Business Document";
+}
+
+
+// import { type NextRequest, NextResponse } from "next/server";
+// import {
+//   assignAgent,
+//   getAgentId,
+//   simulateAgentAnalysis,
+//   generateComprehensiveInsights,
+//   type ProcessedFile,
+// } from "@/lib/crew-agents";
+
+// // --- Import necessary parsing libraries (install them first via pnpm add [library-name]) ---
+// // For PDFs:
+// import pdfParse from 'pdf-parse'; // npm install pdf-parse
+// // For XLSX/Excel:
+// import * as XLSX from 'xlsx'; // npm install xlsx
+// // For DOCX/Word:
+// import mammoth from 'mammoth'; // npm install mammoth
+
+// // Node.js Buffer is often needed for parsing binary file ArrayBuffers
+// import { Buffer } from 'buffer';
+
+// // Function to extract text from different file types
+// async function extractTextFromFile(file: File): Promise<string> {
+//   const fileName = file.name.toLowerCase();
+//   const fileType = file.type;
+
+//   try {
+//     // 1. Handle plain text files (.txt) - Always return actual content
+//     if (fileType.includes("text/plain") || fileName.endsWith(".txt")) {
+//       return await file.text();
+//     }
+
+//     // 2. Handle CSV files (.csv) - Always return actual content
+//     if (fileType.includes("text/csv") || fileName.endsWith(".csv")) {
+//       return await file.text();
+//     }
+
+//     // --- IMPORTANT: ADD YOUR PARSING LOGIC FOR OTHER FILE TYPES BELOW ---
+
+//     // 3. Handle PDF files (.pdf)
+//     if (fileType.includes("application/pdf") || fileName.endsWith(".pdf")) {
+//       console.log(`Attempting to parse PDF: ${file.name}`);
+//       try {
+//         const arrayBuffer = await file.arrayBuffer();
+//         // --- YOUR PDF PARSING LOGIC HERE (using 'pdf-parse' or similar) ---
+//         // You need to uncomment 'import pdfParse from 'pdf-parse';' at the top
+//         // and add your implementation here. Example:
+//         const data = await pdfParse(Buffer.from(arrayBuffer));
+//         return `PDF Content from ${file.name}:\n${data.text}`;
+
+//         // Placeholder if parsing logic is not yet implemented:
+//         // console.warn(`PDF parsing for ${file.name} is not fully implemented. Returning placeholder.`);
+//         // return `[PDF Content for ${file.name} - Requires 'pdf-parse' library integration]`;
+//       } catch (pdfError) {
+//         console.error(`Error parsing PDF ${file.name}:`, pdfError);
+//         return `[Failed to parse PDF: ${file.name}] Error: ${pdfError instanceof Error ? pdfError.message : String(pdfError)}`;
+//       }
+//     }
+
+//     // 4. Handle XLSX/XLS (Excel) files
+//     if (
+//       fileType.includes("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") ||
+//       fileName.endsWith(".xlsx") ||
+//       fileName.endsWith(".xls")
+//     ) {
+//       console.log(`Attempting to parse Excel: ${file.name}`);
+//       try {
+//         const arrayBuffer = await file.arrayBuffer();
+//         // --- YOUR EXCEL PARSING LOGIC HERE (using 'xlsx' library) ---
+//         // You need to uncomment 'import * as XLSX from 'xlsx';' at the top
+//         // and add your implementation here. Example (extracts text from first sheet):
+//         const workbook = XLSX.read(Buffer.from(arrayBuffer), { type: 'array' });
+//         const sheetName = workbook.SheetNames[0]; // Get the first sheet's name
+//         const worksheet = workbook.Sheets[sheetName];
+//         return `Excel Content from ${file.name}:\n${XLSX.utils.sheet_to_txt(worksheet)}`; // Converts sheet to plain text
+
+//         // Placeholder if parsing logic is not yet implemented:
+//         // console.warn(`Excel parsing for ${file.name} is not fully implemented. Returning placeholder.`);
+//         // return `[Excel Content for ${file.name} - Requires 'xlsx' library integration]`;
+//       } catch (excelError) {
+//         console.error(`Error parsing Excel ${file.name}:`, excelError);
+//         return `[Failed to parse Excel: ${file.name}] Error: ${excelError instanceof Error ? excelError.message : String(excelError)}`;
+//       }
+//     }
+
+//     // 5. Handle DOCX (Word) files
+//     if (
+//       fileType.includes("application/vnd.openxmlformats-officedocument.wordprocessingml.document") ||
+//       fileName.endsWith(".docx")
+//     ) {
+//       console.log(`Attempting to parse DOCX: ${file.name}`);
+//       try {
+//         const arrayBuffer = await file.arrayBuffer();
+//         // --- YOUR DOCX PARSING LOGIC HERE (using 'mammoth' library) ---
+//         // You need to uncomment 'import mammoth from 'mammoth';' at the top
+//         // and add your implementation here. Example:
+//         const result = await mammoth.extractRawText({ arrayBuffer: arrayBuffer });
+//         return `Word Document Content from ${file.name}:\n${result.value}`;
+
+//         // Placeholder if parsing logic is not yet implemented:
+//         // console.warn(`DOCX parsing for ${file.name} is not fully implemented. Returning placeholder.`);
+//         // return `[Word Document Content for ${file.name} - Requires 'mammoth' library integration]`;
+//       } catch (docxError) {
+//         console.error(`Error parsing DOCX ${file.name}:`, docxError);
+//         return `[Failed to parse DOCX: ${file.name}] Error: ${docxError instanceof Error ? docxError.message : String(docxError)}`;
+//       }
+//     }
+
+//     // Fallback for unsupported types, indicating actual content is missing
+//     console.warn(`Unsupported file type for full content extraction: ${file.name} (${file.type}).`);
+//     return `[Unsupported file type for full extraction] File: ${file.name}, Type: ${file.type || "Unknown"}, Size: ${(file.size / 1024).toFixed(2)} KB`;
+
+//   } catch (error) {
+//     console.error(`Generic error extracting text from file ${file.name}:`, error);
+//     return `Error processing ${file.name}. File type: ${file.type}, Size: ${file.size} bytes. Detailed error: ${error instanceof Error ? error.message : String(error)}`;
+//   }
+// }
+
+// export async function POST(request: NextRequest) {
+//   try {
+//     const formData = await request.formData();
+//     const files = formData.getAll("files") as File[];
+
+//     if (!files || files.length === 0) {
+//       return NextResponse.json({ error: "No files provided" }, { status: 400 });
+//     }
+
+//     const processedFiles: ProcessedFile[] = [];
+
+//     for (const file of files) {
+//       // Call the enhanced extractTextFromFile to get actual or placeholder content
+//       const extractedContent = await extractTextFromFile(file);
+
+//       // Assign appropriate AI agent based on file name and now potentially actual content
+//       const agent = assignAgent(file.name, extractedContent);
+//       const agentId = getAgentId(agent);
+
+//       // Simulate agent analysis - this function now receives the extracted content
+//       const agentAnalysis = simulateAgentAnalysis(agent, extractedContent);
+
+//       const processedFile: ProcessedFile = {
+//         name: file.name,
+//         size: file.size,
+//         type: file.type || "text/plain",
+//         uploadDate: new Date().toISOString(),
+//         agent,
+//         agentId,
+//         // The 'content' field in processedFile is for a preview, truncate it if needed
+//         content: extractedContent.substring(0, 1000),
+//         agentAnalysis,
+//       };
+
+//       processedFiles.push(processedFile);
+//     }
+
+//     // Generate comprehensive insights - this will now use files with richer content
+//     const comprehensiveData = generateComprehensiveInsights(processedFiles);
+
+//     // Simulate processing delay for demonstration, remove in production if not needed
+//     await new Promise((resolve) => setTimeout(resolve, 2000));
+
+//     return NextResponse.json({
+//       success: true,
+//       message: `Successfully processed ${files.length} file(s)`,
+//       ...comprehensiveData,
+//     });
+//   } catch (error) {
+//     console.error("File processing error:", error);
+//     return NextResponse.json({ error: "Failed to process files" }, { status: 500 });
+//   }
+// }
+
+// // This helper function can remain if used elsewhere, but its logic for file type
+// // detection is now largely superseded by extractTextFromFile for content extraction.
+// function getFileType(filename: string, mimeType: string): string {
+//   const extension = filename.split(".").pop()?.toLowerCase();
+//   const lowerFilename = filename.toLowerCase();
+
+//   if (lowerFilename.includes("crm") || lowerFilename.includes("customer") || lowerFilename.includes("lead")) {
+//     return "CRM Data";
+//   }
+//   if (lowerFilename.includes("sales") || lowerFilename.includes("revenue")) {
+//     return "Sales Report";
+//   }
+//   if (lowerFilename.includes("campaign") || lowerFilename.includes("marketing")) {
+//     return "Marketing Data";
+//   }
+//   if (lowerFilename.includes("feedback") || lowerFilename.includes("review")) {
+//     return "Customer Feedback";
+//   }
+
+//   if (extension === "csv" || mimeType.includes("csv")) return "CSV Data";
+//   if (extension === "pdf" || mimeType.includes("pdf")) return "PDF Document";
+//   if (extension === "xlsx" || extension === "xls" || mimeType.includes("spreadsheet")) return "Spreadsheet";
+//   if (mimeType.includes("image")) return "Scanned Document";
+//   if (extension === "txt" || mimeType.includes("text")) return "Text Document";
+
+//   return "Business Document";
+// }
+
+
 // import { type NextRequest, NextResponse } from "next/server"
 // import {
 //   assignAgent,
@@ -240,201 +605,201 @@
 
 
 
-import { type NextRequest, NextResponse } from "next/server";
-import {
-  assignAgent,
-  getAgentId,
-  simulateAgentAnalysis,
-  generateComprehensiveInsights,
-  type ProcessedFile,
-} from "@/lib/crew-agents";
+// import { type NextRequest, NextResponse } from "next/server";
+// import {
+//   assignAgent,
+//   getAgentId,
+//   simulateAgentAnalysis,
+//   generateComprehensiveInsights,
+//   type ProcessedFile,
+// } from "@/lib/crew-agents";
 
-// --- Import necessary parsing libraries (install them first via pnpm add [library-name]) ---
-// For PDFs:
-// import pdfParse from 'pdf-parse'; // npm install pdf-parse
-// For XLSX/Excel:
-// import * as XLSX from 'xlsx'; // npm install xlsx
-// For DOCX/Word:
-// import mammoth from 'mammoth'; // npm install mammoth
+// // --- Import necessary parsing libraries (install them first via pnpm add [library-name]) ---
+// // For PDFs:
+// // import pdfParse from 'pdf-parse'; // npm install pdf-parse
+// // For XLSX/Excel:
+// // import * as XLSX from 'xlsx'; // npm install xlsx
+// // For DOCX/Word:
+// // import mammoth from 'mammoth'; // npm install mammoth
 
-// Node.js Buffer is often needed for parsing binary file ArrayBuffers
-import { Buffer } from 'buffer';
+// // Node.js Buffer is often needed for parsing binary file ArrayBuffers
+// import { Buffer } from 'buffer';
 
-// Function to extract text from different file types
-async function extractTextFromFile(file: File): Promise<string> {
-  const fileName = file.name.toLowerCase();
-  const fileType = file.type;
+// // Function to extract text from different file types
+// async function extractTextFromFile(file: File): Promise<string> {
+//   const fileName = file.name.toLowerCase();
+//   const fileType = file.type;
 
-  try {
-    // 1. Handle plain text files (.txt) - Always return actual content
-    if (fileType.includes("text/plain") || fileName.endsWith(".txt")) {
-      return await file.text();
-    }
+//   try {
+//     // 1. Handle plain text files (.txt) - Always return actual content
+//     if (fileType.includes("text/plain") || fileName.endsWith(".txt")) {
+//       return await file.text();
+//     }
 
-    // 2. Handle CSV files (.csv) - Always return actual content
-    if (fileType.includes("text/csv") || fileName.endsWith(".csv")) {
-      return await file.text();
-    }
+//     // 2. Handle CSV files (.csv) - Always return actual content
+//     if (fileType.includes("text/csv") || fileName.endsWith(".csv")) {
+//       return await file.text();
+//     }
 
-    // --- IMPORTANT: ADD YOUR PARSING LOGIC FOR OTHER FILE TYPES BELOW ---
+//     // --- IMPORTANT: ADD YOUR PARSING LOGIC FOR OTHER FILE TYPES BELOW ---
 
-    // 3. Handle PDF files (.pdf)
-    if (fileType.includes("application/pdf") || fileName.endsWith(".pdf")) {
-      console.log(`Attempting to parse PDF: ${file.name}`);
-      try {
-        const arrayBuffer = await file.arrayBuffer();
-        // --- YOUR PDF PARSING LOGIC HERE (using 'pdf-parse' or similar) ---
-        // You need to uncomment 'import pdfParse from 'pdf-parse';' at the top
-        // and add your implementation here. Example:
-        // const data = await pdfParse(Buffer.from(arrayBuffer));
-        // return `PDF Content from ${file.name}:\n${data.text}`;
+//     // 3. Handle PDF files (.pdf)
+//     if (fileType.includes("application/pdf") || fileName.endsWith(".pdf")) {
+//       console.log(`Attempting to parse PDF: ${file.name}`);
+//       try {
+//         const arrayBuffer = await file.arrayBuffer();
+//         // --- YOUR PDF PARSING LOGIC HERE (using 'pdf-parse' or similar) ---
+//         // You need to uncomment 'import pdfParse from 'pdf-parse';' at the top
+//         // and add your implementation here. Example:
+//         // const data = await pdfParse(Buffer.from(arrayBuffer));
+//         // return `PDF Content from ${file.name}:\n${data.text}`;
 
-        // Placeholder if parsing logic is not yet implemented:
-        console.warn(`PDF parsing for ${file.name} is not fully implemented. Returning placeholder.`);
-        return `[PDF Content for ${file.name} - Requires 'pdf-parse' library integration]`;
-      } catch (pdfError) {
-        console.error(`Error parsing PDF ${file.name}:`, pdfError);
-        return `[Failed to parse PDF: ${file.name}] Error: ${pdfError instanceof Error ? pdfError.message : String(pdfError)}`;
-      }
-    }
+//         // Placeholder if parsing logic is not yet implemented:
+//         console.warn(`PDF parsing for ${file.name} is not fully implemented. Returning placeholder.`);
+//         return `[PDF Content for ${file.name} - Requires 'pdf-parse' library integration]`;
+//       } catch (pdfError) {
+//         console.error(`Error parsing PDF ${file.name}:`, pdfError);
+//         return `[Failed to parse PDF: ${file.name}] Error: ${pdfError instanceof Error ? pdfError.message : String(pdfError)}`;
+//       }
+//     }
 
-    // 4. Handle XLSX/XLS (Excel) files
-    if (
-      fileType.includes("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") ||
-      fileName.endsWith(".xlsx") ||
-      fileName.endsWith(".xls")
-    ) {
-      console.log(`Attempting to parse Excel: ${file.name}`);
-      try {
-        const arrayBuffer = await file.arrayBuffer();
-        // --- YOUR EXCEL PARSING LOGIC HERE (using 'xlsx' library) ---
-        // You need to uncomment 'import * as XLSX from 'xlsx';' at the top
-        // and add your implementation here. Example (extracts text from first sheet):
-        // const workbook = XLSX.read(Buffer.from(arrayBuffer), { type: 'array' });
-        // const sheetName = workbook.SheetNames[0]; // Get the first sheet's name
-        // const worksheet = workbook.Sheets[sheetName];
-        // return `Excel Content from ${file.name}:\n${XLSX.utils.sheet_to_txt(worksheet)}`; // Converts sheet to plain text
+//     // 4. Handle XLSX/XLS (Excel) files
+//     if (
+//       fileType.includes("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") ||
+//       fileName.endsWith(".xlsx") ||
+//       fileName.endsWith(".xls")
+//     ) {
+//       console.log(`Attempting to parse Excel: ${file.name}`);
+//       try {
+//         const arrayBuffer = await file.arrayBuffer();
+//         // --- YOUR EXCEL PARSING LOGIC HERE (using 'xlsx' library) ---
+//         // You need to uncomment 'import * as XLSX from 'xlsx';' at the top
+//         // and add your implementation here. Example (extracts text from first sheet):
+//         // const workbook = XLSX.read(Buffer.from(arrayBuffer), { type: 'array' });
+//         // const sheetName = workbook.SheetNames[0]; // Get the first sheet's name
+//         // const worksheet = workbook.Sheets[sheetName];
+//         // return `Excel Content from ${file.name}:\n${XLSX.utils.sheet_to_txt(worksheet)}`; // Converts sheet to plain text
 
-        // Placeholder if parsing logic is not yet implemented:
-        console.warn(`Excel parsing for ${file.name} is not fully implemented. Returning placeholder.`);
-        return `[Excel Content for ${file.name} - Requires 'xlsx' library integration]`;
-      } catch (excelError) {
-        console.error(`Error parsing Excel ${file.name}:`, excelError);
-        return `[Failed to parse Excel: ${file.name}] Error: ${excelError instanceof Error ? excelError.message : String(excelError)}`;
-      }
-    }
+//         // Placeholder if parsing logic is not yet implemented:
+//         console.warn(`Excel parsing for ${file.name} is not fully implemented. Returning placeholder.`);
+//         return `[Excel Content for ${file.name} - Requires 'xlsx' library integration]`;
+//       } catch (excelError) {
+//         console.error(`Error parsing Excel ${file.name}:`, excelError);
+//         return `[Failed to parse Excel: ${file.name}] Error: ${excelError instanceof Error ? excelError.message : String(excelError)}`;
+//       }
+//     }
 
-    // 5. Handle DOCX (Word) files
-    if (
-      fileType.includes("application/vnd.openxmlformats-officedocument.wordprocessingml.document") ||
-      fileName.endsWith(".docx")
-    ) {
-      console.log(`Attempting to parse DOCX: ${file.name}`);
-      try {
-        const arrayBuffer = await file.arrayBuffer();
-        // --- YOUR DOCX PARSING LOGIC HERE (using 'mammoth' library) ---
-        // You need to uncomment 'import mammoth from 'mammoth';' at the top
-        // and add your implementation here. Example:
-        // const result = await mammoth.extractRawText({ arrayBuffer: arrayBuffer });
-        // return `Word Document Content from ${file.name}:\n${result.value}`;
+//     // 5. Handle DOCX (Word) files
+//     if (
+//       fileType.includes("application/vnd.openxmlformats-officedocument.wordprocessingml.document") ||
+//       fileName.endsWith(".docx")
+//     ) {
+//       console.log(`Attempting to parse DOCX: ${file.name}`);
+//       try {
+//         const arrayBuffer = await file.arrayBuffer();
+//         // --- YOUR DOCX PARSING LOGIC HERE (using 'mammoth' library) ---
+//         // You need to uncomment 'import mammoth from 'mammoth';' at the top
+//         // and add your implementation here. Example:
+//         // const result = await mammoth.extractRawText({ arrayBuffer: arrayBuffer });
+//         // return `Word Document Content from ${file.name}:\n${result.value}`;
 
-        // Placeholder if parsing logic is not yet implemented:
-        console.warn(`DOCX parsing for ${file.name} is not fully implemented. Returning placeholder.`);
-        return `[Word Document Content for ${file.name} - Requires 'mammoth' library integration]`;
-      } catch (docxError) {
-        console.error(`Error parsing DOCX ${file.name}:`, docxError);
-        return `[Failed to parse DOCX: ${file.name}] Error: ${docxError instanceof Error ? docxError.message : String(docxError)}`;
-      }
-    }
+//         // Placeholder if parsing logic is not yet implemented:
+//         console.warn(`DOCX parsing for ${file.name} is not fully implemented. Returning placeholder.`);
+//         return `[Word Document Content for ${file.name} - Requires 'mammoth' library integration]`;
+//       } catch (docxError) {
+//         console.error(`Error parsing DOCX ${file.name}:`, docxError);
+//         return `[Failed to parse DOCX: ${file.name}] Error: ${docxError instanceof Error ? docxError.message : String(docxError)}`;
+//       }
+//     }
 
-    // Fallback for unsupported types, indicating actual content is missing
-    console.warn(`Unsupported file type for full content extraction: ${file.name} (${file.type}).`);
-    return `[Unsupported file type for full extraction] File: ${file.name}, Type: ${file.type || "Unknown"}, Size: ${(file.size / 1024).toFixed(2)} KB`;
+//     // Fallback for unsupported types, indicating actual content is missing
+//     console.warn(`Unsupported file type for full content extraction: ${file.name} (${file.type}).`);
+//     return `[Unsupported file type for full extraction] File: ${file.name}, Type: ${file.type || "Unknown"}, Size: ${(file.size / 1024).toFixed(2)} KB`;
 
-  } catch (error) {
-    console.error(`Generic error extracting text from file ${file.name}:`, error);
-    return `Error processing ${file.name}. File type: ${file.type}, Size: ${file.size} bytes. Detailed error: ${error instanceof Error ? error.message : String(error)}`;
-  }
-}
+//   } catch (error) {
+//     console.error(`Generic error extracting text from file ${file.name}:`, error);
+//     return `Error processing ${file.name}. File type: ${file.type}, Size: ${file.size} bytes. Detailed error: ${error instanceof Error ? error.message : String(error)}`;
+//   }
+// }
 
-export async function POST(request: NextRequest) {
-  try {
-    const formData = await request.formData();
-    const files = formData.getAll("files") as File[];
+// export async function POST(request: NextRequest) {
+//   try {
+//     const formData = await request.formData();
+//     const files = formData.getAll("files") as File[];
 
-    if (!files || files.length === 0) {
-      return NextResponse.json({ error: "No files provided" }, { status: 400 });
-    }
+//     if (!files || files.length === 0) {
+//       return NextResponse.json({ error: "No files provided" }, { status: 400 });
+//     }
 
-    const processedFiles: ProcessedFile[] = [];
+//     const processedFiles: ProcessedFile[] = [];
 
-    for (const file of files) {
-      // Call the enhanced extractTextFromFile to get actual or placeholder content
-      const extractedContent = await extractTextFromFile(file);
+//     for (const file of files) {
+//       // Call the enhanced extractTextFromFile to get actual or placeholder content
+//       const extractedContent = await extractTextFromFile(file);
 
-      // Assign appropriate AI agent based on file name and now potentially actual content
-      const agent = assignAgent(file.name, extractedContent);
-      const agentId = getAgentId(agent);
+//       // Assign appropriate AI agent based on file name and now potentially actual content
+//       const agent = assignAgent(file.name, extractedContent);
+//       const agentId = getAgentId(agent);
 
-      // Simulate agent analysis - this function now receives the extracted content
-      const agentAnalysis = simulateAgentAnalysis(agent, extractedContent);
+//       // Simulate agent analysis - this function now receives the extracted content
+//       const agentAnalysis = simulateAgentAnalysis(agent, extractedContent);
 
-      const processedFile: ProcessedFile = {
-        name: file.name,
-        size: file.size,
-        type: file.type || "text/plain",
-        uploadDate: new Date().toISOString(),
-        agent,
-        agentId,
-        // The 'content' field in processedFile is for a preview, truncate it if needed
-        content: extractedContent.substring(0, 1000),
-        agentAnalysis,
-      };
+//       const processedFile: ProcessedFile = {
+//         name: file.name,
+//         size: file.size,
+//         type: file.type || "text/plain",
+//         uploadDate: new Date().toISOString(),
+//         agent,
+//         agentId,
+//         // The 'content' field in processedFile is for a preview, truncate it if needed
+//         content: extractedContent.substring(0, 1000),
+//         agentAnalysis,
+//       };
 
-      processedFiles.push(processedFile);
-    }
+//       processedFiles.push(processedFile);
+//     }
 
-    // Generate comprehensive insights - this will now use files with richer content
-    const comprehensiveData = generateComprehensiveInsights(processedFiles);
+//     // Generate comprehensive insights - this will now use files with richer content
+//     const comprehensiveData = generateComprehensiveInsights(processedFiles);
 
-    // Simulate processing delay for demonstration, remove in production if not needed
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+//     // Simulate processing delay for demonstration, remove in production if not needed
+//     await new Promise((resolve) => setTimeout(resolve, 2000));
 
-    return NextResponse.json({
-      success: true,
-      message: `Successfully processed ${files.length} file(s)`,
-      ...comprehensiveData,
-    });
-  } catch (error) {
-    console.error("File processing error:", error);
-    return NextResponse.json({ error: "Failed to process files" }, { status: 500 });
-  }
-}
+//     return NextResponse.json({
+//       success: true,
+//       message: `Successfully processed ${files.length} file(s)`,
+//       ...comprehensiveData,
+//     });
+//   } catch (error) {
+//     console.error("File processing error:", error);
+//     return NextResponse.json({ error: "Failed to process files" }, { status: 500 });
+//   }
+// }
 
-// This helper function can remain if used elsewhere, but its logic for file type
-// detection is now largely superseded by extractTextFromFile for content extraction.
-function getFileType(filename: string, mimeType: string): string {
-  const extension = filename.split(".").pop()?.toLowerCase();
-  const lowerFilename = filename.toLowerCase();
+// // This helper function can remain if used elsewhere, but its logic for file type
+// // detection is now largely superseded by extractTextFromFile for content extraction.
+// function getFileType(filename: string, mimeType: string): string {
+//   const extension = filename.split(".").pop()?.toLowerCase();
+//   const lowerFilename = filename.toLowerCase();
 
-  if (lowerFilename.includes("crm") || lowerFilename.includes("customer") || lowerFilename.includes("lead")) {
-    return "CRM Data";
-  }
-  if (lowerFilename.includes("sales") || lowerFilename.includes("revenue")) {
-    return "Sales Report";
-  }
-  if (lowerFilename.includes("campaign") || lowerFilename.includes("marketing")) {
-    return "Marketing Data";
-  }
-  if (lowerFilename.includes("feedback") || lowerFilename.includes("review")) {
-    return "Customer Feedback";
-  }
+//   if (lowerFilename.includes("crm") || lowerFilename.includes("customer") || lowerFilename.includes("lead")) {
+//     return "CRM Data";
+//   }
+//   if (lowerFilename.includes("sales") || lowerFilename.includes("revenue")) {
+//     return "Sales Report";
+//   }
+//   if (lowerFilename.includes("campaign") || lowerFilename.includes("marketing")) {
+//     return "Marketing Data";
+//   }
+//   if (lowerFilename.includes("feedback") || lowerFilename.includes("review")) {
+//     return "Customer Feedback";
+//   }
 
-  if (extension === "csv" || mimeType.includes("csv")) return "CSV Data";
-  if (extension === "pdf" || mimeType.includes("pdf")) return "PDF Document";
-  if (extension === "xlsx" || extension === "xls" || mimeType.includes("spreadsheet")) return "Spreadsheet";
-  if (mimeType.includes("image")) return "Scanned Document";
-  if (extension === "txt" || mimeType.includes("text")) return "Text Document";
+//   if (extension === "csv" || mimeType.includes("csv")) return "CSV Data";
+//   if (extension === "pdf" || mimeType.includes("pdf")) return "PDF Document";
+//   if (extension === "xlsx" || extension === "xls" || mimeType.includes("spreadsheet")) return "Spreadsheet";
+//   if (mimeType.includes("image")) return "Scanned Document";
+//   if (extension === "txt" || mimeType.includes("text")) return "Text Document";
 
-  return "Business Document";
-}
+//   return "Business Document";
+// }

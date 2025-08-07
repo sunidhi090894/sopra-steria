@@ -1,7 +1,8 @@
+// app/api/chat/route.ts
 import { type NextRequest, NextResponse } from "next/server";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export async function POST(request: NextRequest) {
-   // In Next.js App Router, the method is usually inferred, but this check matches the provided example.
   if (request.method !== "POST") {
     return NextResponse.json({ error: "Method not allowed" }, { status: 405 });
   }
@@ -19,117 +20,51 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "API key is not configured." }, { status: 500 });
     }
 
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${API_KEY}`;
+    // Initialize the Google Generative AI client
+    const genAI = new GoogleGenerativeAI(API_KEY);
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
 
-    // --- Build Comprehensive System Context ---
-    // Start with the general chatbot context from environment variables
-    let comprehensiveSystemContext = process.env.CHATBOT_CONTEXT || "You are a helpful AI assistant.";
+    // Build the AI's persona and context
+    let systemInstruction = "You are a specialized business intelligence AI assistant. Your purpose is to analyze documents and provide detailed, actionable insights based on the content provided.";
 
-    // Append the detailed context from processedData
-    if (processedData && processedData.processedFiles) {
-      comprehensiveSystemContext += `\n\nYou have access to the following processed business documents:\n\n`;
-
-      processedData.processedFiles.forEach((file: any, index: number) => {
-        comprehensiveSystemContext += `Document ${index + 1}: ${file.name}\n`;
-        comprehensiveSystemContext += `- Type: ${file.type}\n`;
-        comprehensiveSystemContext += `- Analyzed by: ${file.agent}\n`;
-        comprehensiveSystemContext += `- Key Insights: ${file.agentAnalysis.insights.join(", ")}\n`;
-        comprehensiveSystemContext += `- Recommendations: ${file.agentAnalysis.recommendations.join(", ")}\n`;
-        // Ensure this 'content' field is populated with actual parsed text from process-files/route.ts
-        comprehensiveSystemContext += `- Content Preview: ${file.content.substring(0, 200)}...\n\n`;
-      });
-
-      if (processedData.extractedInsights) {
-        comprehensiveSystemContext += `\nKey Business Metrics:\n`;
-        comprehensiveSystemContext += `- Total Leads: ${processedData.extractedInsights.crmData?.totalLeads}\n`;
-        comprehensiveSystemContext += `- Conversion Rate: ${processedData.extractedInsights.crmData?.conversionRate}%\n`;
-        comprehensiveSystemContext += `- Total Revenue: $${processedData.extractedInsights.salesData?.totalRevenue?.toLocaleString()}\n`;
-        comprehensiveSystemContext += `- Growth Rate: ${processedData.extractedInsights.salesData?.growthRate}%\n`;
-        comprehensiveSystemContext += `- Campaign ROI: ${processedData.extractedInsights.campaignData?.totalROI}x\n`;
-        comprehensiveSystemContext += `- Customer Satisfaction: ${processedData.extractedInsights.feedback?.satisfactionScore}/5\n`;
-      }
+    // Append the full extracted content from the processed files
+    if (processedData && processedData.extractedContent) {
+        systemInstruction += `\n\n--- Start of Documents for Analysis ---\n\n`;
+        systemInstruction += processedData.extractedContent;
+        systemInstruction += `\n\n--- End of Documents for Analysis ---\n\n`;
+        systemInstruction += `\n\nBased on the documents provided, answer the user's questions. Be specific and reference the content from the documents directly. If the information is not present, state that clearly.`;
+    } else {
+        systemInstruction += "\n\nNo documents have been provided for analysis. Respond to general questions as a helpful assistant.";
     }
-    // Final instruction for the AI, appended to the comprehensive context
-    comprehensiveSystemContext += `\n\nProvide detailed, actionable insights based on the document analysis. Be specific and reference the actual data when possible.`;
 
+    // Format messages for the API call
+    const formattedMessages = messages.map((msg: any) => ({
+      role: msg.role === "user" ? "user" : "model",
+      parts: [{ text: msg.content }],
+    }));
 
-    // Prepare messages for the Gemini API
-    let contentToSend: any[] = [];
+    // Prepend the system instruction to the messages array to set the context for the model.
+    // NOTE: The Gemini API prefers system instructions to be in a separate parameter
+    // in the SDK, but in this implementation, we will prepend it to the message history.
+    const finalMessages = [{ role: "user", parts: [{ text: systemInstruction }] }, ...formattedMessages];
+    
+    console.log("Sending prompt to Gemini API:", JSON.stringify(finalMessages, null, 2));
 
-    // Prepend the comprehensive system context as the first user message,
-    // as per the structure of the example you provided.
-    // Note: Gemini API often has a dedicated 'system_instruction' parameter in SDKs,
-    // but direct REST API calls using 'contents' array typically use 'user' or 'model' roles.
-    contentToSend.push({ role: "user", parts: [{ text: comprehensiveSystemContext }] });
-
-    // Add the rest of the user's chat messages
-    messages.forEach((msg: any) => {
-        contentToSend.push({
-            role: msg.role === "user" ? "user" : "model", // Map roles as per Gemini API expectation
-            parts: [{ text: msg.content }],
-        });
-    });
-
-    // --- Optional Debugging: Uncomment to see the full payload sent to Gemini ---
-    // console.log("DEBUG: Full Payload Contents to Gemini API:", JSON.stringify(contentToSend, null, 2));
-
-
-    // Retry mechanism for Gemini API 503 errors
-    const maxRetries = 3;
-    let attempt = 0;
-    let lastError;
-    let data = null;
-    let reply = null;
-    while (attempt < maxRetries) {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: contentToSend,
-          generationConfig: {
+    const result = await model.generateContent({
+        contents: finalMessages,
+        generationConfig: {
             temperature: 0.7,
             maxOutputTokens: 1000,
-          },
-        }),
-      });
+        },
+    });
 
-      if (response.ok) {
-        data = await response.json();
-        console.log("Gemini API raw response:", JSON.stringify(data, null, 2));
-        reply = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        console.log("Gemini API reply:", reply);
-        if (!reply) {
-          console.error("Gemini API returned no reply. Full response:", JSON.stringify(data, null, 2));
-        }
-        break;
-      } else {
-        const errorText = await response.text();
-        try {
-          const errorJson = JSON.parse(errorText);
-          if (errorJson.error && errorJson.error.code === 503) {
-            attempt++;
-            lastError = errorJson;
-            console.warn(`Gemini API 503 error (attempt ${attempt}): ${errorJson.error.message}`);
-            await new Promise(res => setTimeout(res, 1000 * attempt));
-            continue;
-          } else {
-            console.error("Gemini API error:", errorText);
-            return NextResponse.json({ error: `Gemini API Error: ${errorText}` }, { status: response.status });
-          }
-        } catch (e) {
-          // Not JSON, treat as fatal
-          console.error("Gemini API error (non-JSON):", errorText);
-          return NextResponse.json({ error: `Gemini API Error: ${errorText}` }, { status: response.status });
-        }
-      }
-    }
+    const reply = result.response.text();
+    console.log("Gemini API reply:", reply);
 
     if (!reply) {
-      console.error("Gemini API failed after retries or returned no valid answer", lastError || data);
-      return NextResponse.json({ error: "Gemini API unavailable or returned no valid answer. Check logs for details." }, { status: 502 });
+      return NextResponse.json({ error: "Gemini API returned no reply." }, { status: 502 });
     }
 
-    // Return the message in the format expected by useChat (message property)
     return NextResponse.json({
       message: {
         id: `${Date.now()}`,
