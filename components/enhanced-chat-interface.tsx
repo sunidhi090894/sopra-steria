@@ -352,20 +352,19 @@ export function EnhancedChatInterface({
           </CardDescription>
         </CardHeader>
 
-        <CardContent className='flex-1 flex flex-col p-0'>
+        <CardContent className='flex-1 flex flex-col p-0 overflow-hidden'>
           {/* Messages */}
-          <ScrollArea className='flex-1 p-6'>
-            <div className='space-y-6'>
+          <ScrollArea className='flex-1 p-6 w-full'>
+            <div className='space-y-6 pr-4'>
               {messages.map((message) => (
                 <div
                   key={message.id}
-                  className={`flex gap-4 ${
+                  className={`flex gap-4 w-full ${
                     message.role === 'user' ? 'justify-end' : 'justify-start'
                   }`}
                 >
-                  {/* Added `min-w-0` to the parent flex container to fix the overflow issue */}
                   <div
-                    className={`flex gap-4 max-w-[85%] min-w-0 ${
+                    className={`flex gap-3 max-w-[85%] ${
                       message.role === 'user' ? 'flex-row-reverse' : 'flex-row'
                     }`}
                   >
@@ -384,45 +383,21 @@ export function EnhancedChatInterface({
                     </div>
 
                     <div
-                      className={`rounded-2xl p-4 shadow-sm ${
+                      className={`rounded-2xl p-4 shadow-sm break-words ${
                         message.role === 'user'
                           ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white'
                           : 'bg-gradient-to-r from-gray-50 to-blue-50 text-gray-900 border border-gray-200'
                       }`}
                     >
-                      {/* The `prose` class is wrapped in a `div` with `min-w-0` and `flex-1` to ensure it wraps */}
-                      <div className='prose prose-sm max-w-none break-words overflow-hidden min-w-0 flex-1'>
+                      <div className='overflow-hidden text-sm leading-relaxed'>
                         {message.role === 'assistant' ? (
-                          <ReactMarkdown>{message.content}</ReactMarkdown>
+                          <div className='prose prose-sm prose-invert max-w-none prose-p:m-0 prose-p:mb-2 prose-li:m-0 prose-ul:m-0 prose-ul:mb-2 prose-code:break-words'>
+                            <ReactMarkdown>{message.content}</ReactMarkdown>
+                          </div>
                         ) : (
-                          message.content
-                            .split('\n')
-                            .map((line: string, index: number) => {
-                              if (line.startsWith('• ')) {
-                                return (
-                                  <p
-                                    key={index}
-                                    className='text-sm mb-2 flex items-start gap-2'
-                                  >
-                                    <span className='text-indigo-500 mt-1'>
-                                      •
-                                    </span>
-                                    <span>{line.slice(2)}</span>
-                                  </p>
-                                );
-                              }
-                              if (line.trim() === '') {
-                                return <br key={index} />;
-                              }
-                              return (
-                                <p
-                                  key={index}
-                                  className='text-sm mb-2 leading-relaxed'
-                                >
-                                  {line}
-                                </p>
-                              );
-                            })
+                          <div className='whitespace-pre-wrap'>
+                            {message.content}
+                          </div>
                         )}
                       </div>
 
@@ -440,11 +415,11 @@ export function EnhancedChatInterface({
               ))}
 
               {isLoading && (
-                <div className='flex gap-4'>
+                <div className='flex gap-3'>
                   <div className='flex-shrink-0 w-10 h-10 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 flex items-center justify-center shadow-md'>
                     <Bot className='h-5 w-5 text-white' />
                   </div>
-                  <div className='bg-gradient-to-r from-gray-50 to-blue-50 rounded-2xl p-4 border border-gray-200 shadow-sm'>
+                  <div className='bg-gradient-to-r from-gray-50 to-blue-50 rounded-2xl p-4 border border-gray-200 shadow-sm max-w-xs'>
                     <div className='flex items-center gap-3'>
                       <div className='flex space-x-1'>
                         <div
@@ -461,7 +436,7 @@ export function EnhancedChatInterface({
                         />
                       </div>
                       <span className='text-sm text-gray-600'>
-                        Gemini AI is analyzing your data...
+                        Gemini AI is analyzing...
                       </span>
                     </div>
                   </div>
