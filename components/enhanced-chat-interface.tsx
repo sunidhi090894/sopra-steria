@@ -363,8 +363,9 @@ export function EnhancedChatInterface({
                     message.role === 'user' ? 'justify-end' : 'justify-start'
                   }`}
                 >
+                  {/* Added `min-w-0` to the parent flex container to fix the overflow issue */}
                   <div
-                    className={`flex gap-4 max-w-[85%] ${
+                    className={`flex gap-4 max-w-[85%] min-w-0 ${
                       message.role === 'user' ? 'flex-row-reverse' : 'flex-row'
                     }`}
                   >
@@ -389,7 +390,8 @@ export function EnhancedChatInterface({
                           : 'bg-gradient-to-r from-gray-50 to-blue-50 text-gray-900 border border-gray-200'
                       }`}
                     >
-                      <div className='prose prose-sm max-w-none'>
+                      {/* The `prose` class is wrapped in a `div` with `min-w-0` and `flex-1` to ensure it wraps */}
+                      <div className='prose prose-sm max-w-none break-words overflow-hidden min-w-0 flex-1'>
                         {message.role === 'assistant' ? (
                           <ReactMarkdown>{message.content}</ReactMarkdown>
                         ) : (
