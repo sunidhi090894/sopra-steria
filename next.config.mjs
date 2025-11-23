@@ -11,9 +11,7 @@ const nextConfig = {
   },
   // This is the added fix for pdf-parse.
   // It tells Next.js not to bundle this package, which prevents the "file not found" error.
-  experimental: {
-    serverComponentsExternalPackages: ['pdf-parse'],
-  },
+  serverExternalPackages: ['pdf-parse'],
 };
 
 export default nextConfig;
